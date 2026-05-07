@@ -1,0 +1,59 @@
+{
+  "vue jsx template": {
+    "prefix": "jsx",
+    "body": [
+      "<script lang='jsx'>",
+      "export default defineComponent({",
+      "  setup() {",
+      "   ",
+      "    return () => (",
+      "      <>",
+      "       ",
+      "      </>",
+      "    )",
+      "  },",
+      "})",
+      "</script>",
+      ""
+    ],
+    "description": "vue jsx template"
+  },
+  "vue setup template": {
+    "prefix": "jsx",
+    "body": [
+	  "",
+      "export default defineComponent({",
+      "  props: {},",
+      "  emits: [],",
+      "  setup() {",
+      "    return () => (",
+      "      <>",
+      "       <div></div>",
+      "      </>",
+      "    )",
+      "  }",
+      "})"
+    ],
+    "description": "vue setup template"
+  },
+  "Vue 3 setup template": {
+    "prefix": "setup",
+    "body": [
+      "<script setup>",
+      "",
+      "</script>",
+      "",
+      "<template>",
+      "  <div>",
+      "    ",
+      "  </div>",
+      "</template>",
+      "",
+      "<style scoped>",
+      "",
+      "</style>"
+    ],
+    "description": "Vue 3 script setup + template + style"
+  }
+
+}
