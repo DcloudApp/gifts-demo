@@ -39,35 +39,36 @@ let giftPlayer
 let simulateTimer
 
 const users = ['小鱼', 'Moon', 'Kevin', '安安', 'Echo', 'Luna']
+const publicAssetUrl = path => `${import.meta.env.BASE_URL}${path.replace(/^\//, '')}`
 const gifts = [
   {
     name: '官方 VAP 大礼物',
-    url: '/gifts/vap/vap.mp4',
+    url: publicAssetUrl('/gifts/vap/vap.mp4'),
     type: 'vap',
     size: 'big',
     config: vapConfig,
   },
   {
     name: 'SVGA 小礼物',
-    url: '/gifts/svga/1.svga',
+    url: publicAssetUrl('/gifts/svga/1.svga'),
     type: 'svga',
     size: 'small',
   },
   {
     name: 'SVGA 小礼物',
-    url: '/gifts/svga/3.svga',
+    url: publicAssetUrl('/gifts/svga/3.svga'),
     type: 'svga',
     size: 'small',
   },
   {
     name: 'SVGA 小礼物',
-    url: '/gifts/svga/4.svga',
+    url: publicAssetUrl('/gifts/svga/4.svga'),
     type: 'svga',
     size: 'small',
   },
   {
     name: 'SVGA 大礼物',
-    url: '/gifts/svga/2.svga',
+    url: publicAssetUrl('/gifts/svga/2.svga'),
     type: 'svga',
     size: 'big',
   },
