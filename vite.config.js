@@ -11,9 +11,16 @@ import Pages from 'vite-plugin-pages'
 import Layouts from 'vite-plugin-vue-layouts'
 
 const timesTamp = new Date().getTime()
+const repositoryName = process.env.GITHUB_REPOSITORY?.split('/')[1]
+const base = process.env.VITE_BASE || (
+  process.env.GITHUB_ACTIONS && repositoryName && !repositoryName.endsWith('.github.io')
+    ? `/${repositoryName}/`
+    : '/'
+)
+
 // https://vitejs.dev/config/
 export default defineConfig({
-  base: '/',
+  base,
   plugins: [
     vue(),
     vueJsx(),
