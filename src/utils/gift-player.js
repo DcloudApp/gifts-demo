@@ -12,6 +12,14 @@ const GIFT_SIZE = {
   SMALL: 'small',
 }
 
+const moduleLoaders = {
+  lottie: undefined,
+  vap: undefined,
+  svga: undefined,
+}
+
+const svgaVideoItemCache = new Map()
+
 export class GiftAnimationPlayer {
   constructor(options = {}) {
     this.container = options.container ? resolveContainer(options.container) : createDefaultContainer()
@@ -30,6 +38,10 @@ export class GiftAnimationPlayer {
       [GIFT_SIZE.SMALL]: [],
     }
     this.active = {
+      [GIFT_SIZE.BIG]: new Map(),
+      [GIFT_SIZE.SMALL]: new Map(),
+    }
+    this.retained = {
       [GIFT_SIZE.BIG]: new Map(),
       [GIFT_SIZE.SMALL]: new Map(),
     }
@@ -79,6 +91,10 @@ export class GiftAnimationPlayer {
     return ids
   }
 
+  preload(urls = []) {
+    return Promise.all(urls.map(url => preloadGift(url)))
+  }
+
   async processQueue(size) {
     if (!size) {
       await Promise.all([
@@ -94,7 +110,7 @@ export class GiftAnimationPlayer {
     this.processing[size] = true
 
     try {
-      while (this.queues[size].length > 0 && this.active[size].size < this.maxConcurrent[size]) {
+      while (this.queues[size].length > 0 && this.getConcurrentSize(size) < this.maxConcurrent[size]) {
         const gift = this.queues[size].shift()
         this.startGift(gift)
       }
@@ -109,9 +125,19 @@ export class GiftAnimationPlayer {
     const fullscreen = gift.fullscreen ?? gift.size === GIFT_SIZE.BIG
     const playContainer = explicitContainer || this.containers[gift.size]
     const bounds = fullscreen ? getContainerBounds(playContainer) : undefined
-    const width = gift.width || (fullscreen ? bounds.width : this.smallWidth)
-    const height = gift.height || (fullscreen ? bounds.height : this.smallHeight)
-    const layer = createLayer(width, height, gift.size, fullscreen || Boolean(explicitContainer))
+    const preserveAspectRatio = gift.preserveAspectRatio ?? gift.size === GIFT_SIZE.BIG
+    const renderSize = getGiftRenderSize(gift, bounds, {
+      fullscreen,
+      preserveAspectRatio,
+      smallWidth: this.smallWidth,
+      smallHeight: this.smallHeight,
+    })
+    const { width, height } = renderSize
+    const layer = createLayer(width, height, gift.size, {
+      fullscreen: fullscreen && !renderSize.fitted,
+      fitted: fullscreen && renderSize.fitted,
+      fillContainer: Boolean(explicitContainer),
+    })
     const layerId = `${gift.id}-${Date.now()}`
     const renderer = new GiftRenderer({
       container: layer,
@@ -123,7 +149,9 @@ export class GiftAnimationPlayer {
       playContainer.prepend(layer)
     else
       playContainer.appendChild(layer)
-    this.active[gift.size].set(layerId, { gift, layer, renderer })
+    const targetMap = gift.skipQueueLimit ? this.retained[gift.size] : this.active[gift.size]
+
+    targetMap.set(layerId, { gift, layer, renderer })
 
     renderer.on('status', ({ status, error, type }) => {
       if (status === PLAYER_STATUS.PLAYING) {
@@ -132,6 +160,11 @@ export class GiftAnimationPlayer {
       }
 
       if (status === PLAYER_STATUS.ENDED) {
+        if (gift.retainAfterEnd) {
+          this.emit('ended', gift)
+          return
+        }
+
         this.removeGift(layerId, PLAYER_STATUS.ENDED)
         return
       }
@@ -205,30 +238,51 @@ export class GiftAnimationPlayer {
       return new Map([
         ...this.active[GIFT_SIZE.BIG],
         ...this.active[GIFT_SIZE.SMALL],
+        ...this.retained[GIFT_SIZE.BIG],
+        ...this.retained[GIFT_SIZE.SMALL],
       ])
     }
 
     return new Map([
       ...Array.from(this.active[GIFT_SIZE.BIG]),
       ...Array.from(this.active[GIFT_SIZE.SMALL]),
+      ...Array.from(this.retained[GIFT_SIZE.BIG]),
+      ...Array.from(this.retained[GIFT_SIZE.SMALL]),
     ].filter(([layerId, item]) => layerId === id || item.gift.id === id))
   }
 
   removeGift(layerId, reason) {
-    const size = this.active[GIFT_SIZE.BIG].has(layerId) ? GIFT_SIZE.BIG : GIFT_SIZE.SMALL
-    const item = this.active[size].get(layerId)
+    const { size, map } = this.getLayerStore(layerId)
+    const item = map?.get(layerId)
 
     if (!item)
       return
 
     item.renderer.destroy()
     item.layer.remove()
-    this.active[size].delete(layerId)
+    map.delete(layerId)
 
     if (reason === PLAYER_STATUS.ENDED)
       this.emit('ended', item.gift)
 
     this.processQueue(size)
+  }
+
+  getConcurrentSize(size) {
+    return this.active[normalizeGiftSize(size)].size
+  }
+
+  getLayerStore(layerId) {
+    if (this.active[GIFT_SIZE.BIG].has(layerId))
+      return { size: GIFT_SIZE.BIG, map: this.active[GIFT_SIZE.BIG] }
+
+    if (this.active[GIFT_SIZE.SMALL].has(layerId))
+      return { size: GIFT_SIZE.SMALL, map: this.active[GIFT_SIZE.SMALL] }
+
+    if (this.retained[GIFT_SIZE.BIG].has(layerId))
+      return { size: GIFT_SIZE.BIG, map: this.retained[GIFT_SIZE.BIG] }
+
+    return { size: GIFT_SIZE.SMALL, map: this.retained[GIFT_SIZE.SMALL] }
   }
 
   emit(eventName, payload) {
@@ -319,7 +373,7 @@ class GiftRenderer {
   }
 
   async playLottie(options, token) {
-    await import('@lottiefiles/lottie-player')
+    await loadLottieModule()
 
     if (token !== this.playToken)
       return
@@ -351,7 +405,7 @@ class GiftRenderer {
   }
 
   async playVap(options, token) {
-    const module = await import('video-animation-player')
+    const module = await loadVapModule()
     const Vap = module.default || module
 
     if (token !== this.playToken)
@@ -387,14 +441,13 @@ class GiftRenderer {
   }
 
   async playSvga(options, token) {
-    const module = await import('svgaplayerweb')
+    const module = await loadSvgaModule()
     const SVGA = module.default || module
 
     if (token !== this.playToken)
       return
 
     const player = new SVGA.Player(this.container)
-    const parser = new SVGA.Parser(this.container)
     this.player = player
     player.loops = options.loop ? 0 : 1
     player.clearsAfterStop = options.clearsAfterStop ?? false
@@ -402,19 +455,20 @@ class GiftRenderer {
     player.onFinished(() => this.setStatus(PLAYER_STATUS.ENDED, { type: 'svga' }))
     player.onFrame(frame => this.emit('frame', { frame, type: 'svga' }))
 
-    parser.load(
-      options.src,
-      (videoItem) => {
-        if (token !== this.playToken)
-          return
+    try {
+      const videoItem = await loadSvgaVideoItem(options.src, this.container)
 
-        player.setVideoItem(videoItem)
-        applySvgaDynamicObjects(player, options.dynamicObjects)
-        player.startAnimation()
-        this.setStatus(PLAYER_STATUS.PLAYING, { type: 'svga' })
-      },
-      error => this.setStatus(PLAYER_STATUS.ERROR, { type: 'svga', error }),
-    )
+      if (token !== this.playToken)
+        return
+
+      player.setVideoItem(videoItem)
+      applySvgaDynamicObjects(player, options.dynamicObjects)
+      player.startAnimation()
+      this.setStatus(PLAYER_STATUS.PLAYING, { type: 'svga' })
+    }
+    catch (error) {
+      this.setStatus(PLAYER_STATUS.ERROR, { type: 'svga', error })
+    }
   }
 
   setStatus(status, detail = {}) {
@@ -533,7 +587,9 @@ function setupContainer(container, options = {}) {
   container.style.pointerEvents ||= 'none'
 }
 
-function createLayer(width, height, size, fullscreen) {
+function createLayer(width, height, size, options = {}) {
+  const fullscreen = Boolean(options.fullscreen || options.fillContainer)
+  const fitted = Boolean(options.fitted)
   const layer = document.createElement('div')
   layer.style.position = 'absolute'
   layer.style.width = fullscreen ? '100%' : `${width}px`
@@ -543,7 +599,12 @@ function createLayer(width, height, size, fullscreen) {
   layer.style.pointerEvents = 'none'
   layer.style.zIndex = size === GIFT_SIZE.BIG ? '2' : '1'
 
-  if (fullscreen) {
+  if (fitted) {
+    layer.style.left = '50%'
+    layer.style.top = '50%'
+    layer.style.transform = 'translate(-50%, -50%)'
+  }
+  else if (fullscreen) {
     layer.style.inset = '0'
   }
   else {
@@ -554,6 +615,79 @@ function createLayer(width, height, size, fullscreen) {
   }
 
   return layer
+}
+
+function getGiftRenderSize(gift, bounds, options) {
+  if (!options.fullscreen) {
+    return {
+      width: gift.width || options.smallWidth,
+      height: gift.height || options.smallHeight,
+      fitted: false,
+    }
+  }
+
+  const width = gift.width || bounds.width
+  const height = gift.height || bounds.height
+
+  if (!options.preserveAspectRatio) {
+    return {
+      width,
+      height,
+      fitted: false,
+    }
+  }
+
+  const naturalSize = getGiftNaturalSize(gift)
+
+  if (!naturalSize) {
+    return {
+      width,
+      height,
+      fitted: false,
+    }
+  }
+
+  return {
+    ...containSize(bounds, naturalSize),
+    fitted: true,
+  }
+}
+
+function getGiftNaturalSize(gift) {
+  const info = gift.config?.info
+  const rgbFrame = info?.rgbFrame
+
+  if (Array.isArray(rgbFrame) && rgbFrame.length >= 4 && rgbFrame[2] > 0 && rgbFrame[3] > 0) {
+    return {
+      width: Number(rgbFrame[2]),
+      height: Number(rgbFrame[3]),
+    }
+  }
+
+  const width = Number(info?.w || info?.videoW)
+  const height = Number(info?.h || info?.videoH)
+
+  if (width > 0 && height > 0)
+    return { width, height }
+
+  return undefined
+}
+
+function containSize(bounds, naturalSize) {
+  const containerRatio = bounds.width / bounds.height
+  const naturalRatio = naturalSize.width / naturalSize.height
+
+  if (containerRatio > naturalRatio) {
+    return {
+      width: Math.round(bounds.height * naturalRatio),
+      height: bounds.height,
+    }
+  }
+
+  return {
+    width: bounds.width,
+    height: Math.round(bounds.width / naturalRatio),
+  }
 }
 
 function getContainerBounds(container) {
@@ -571,5 +705,53 @@ function applySvgaDynamicObjects(player, dynamicObjects = {}) {
 
   Object.entries(dynamicObjects.texts || {}).forEach(([key, value]) => {
     player.setText(value, key)
+  })
+}
+
+function loadLottieModule() {
+  moduleLoaders.lottie ||= import('@lottiefiles/lottie-player')
+  return moduleLoaders.lottie
+}
+
+function loadVapModule() {
+  moduleLoaders.vap ||= import('video-animation-player')
+  return moduleLoaders.vap
+}
+
+function loadSvgaModule() {
+  moduleLoaders.svga ||= import('svgaplayerweb')
+  return moduleLoaders.svga
+}
+
+async function preloadGift(url) {
+  const gift = normalizeGift(url)
+
+  if (gift.type === 'svga')
+    return loadSvgaVideoItem(gift.src)
+
+  if (gift.type === 'vap')
+    return loadVapModule()
+
+  return loadLottieModule()
+}
+
+async function loadSvgaVideoItem(src, container) {
+  if (!svgaVideoItemCache.has(src)) {
+    svgaVideoItemCache.set(src, createSvgaVideoItem(src, container).catch((error) => {
+      svgaVideoItemCache.delete(src)
+      throw error
+    }))
+  }
+
+  return svgaVideoItemCache.get(src)
+}
+
+async function createSvgaVideoItem(src, container) {
+  const module = await loadSvgaModule()
+  const SVGA = module.default || module
+
+  return new Promise((resolve, reject) => {
+    const parser = new SVGA.Parser(container || document.body)
+    parser.load(src, resolve, reject)
   })
 }

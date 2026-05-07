@@ -8,14 +8,9 @@
 
 <style scoped>
 .app-shell {
-  min-height: 100vh;
+  height: 100%;
   box-sizing: border-box;
   background: #eef6ff;
-}
-
-:deep(nav) {
-  display: flex;
-  justify-content: center;
-  color: #0f172a;
+  overflow: hidden;
 }
 </style>
